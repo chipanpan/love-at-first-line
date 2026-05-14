@@ -1,7 +1,11 @@
-import streamlit as st
-import pandas as pd
+import ast
+from pathlib import Path
+
 import html
-import base64
+
+import numpy as np
+import pandas as pd
+import streamlit as st
 import streamlit.components.v1 as components
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -37,28 +41,97 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────
+# DATA + MODEL CONFIG
+# ─────────────────────────────────────────────
+DATASETS = {
+    "Thriller sample": "data/thrillers.csv",
+    "Full catalog": "data/books_dataset.csv",
+}
+SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+CACHE_DIR = Path(".cache/book_matchmaker")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ─────────────────────────────────────────────
 # DATA LOADING  — cached so it only runs once
 # ─────────────────────────────────────────────
+def _parse_genres(value) -> str:
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            parsed = []
+
+        if isinstance(parsed, list):
+            return ", ".join(
+                str(item).strip().strip("'").strip('"')
+                for item in parsed
+                if str(item).strip()
+            )
+
+    return text
+
+
+def _normalize_schema(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    if "genres" in df.columns:
+        df["genres"] = df["genres"].fillna("").map(_parse_genres)
+    elif "genres_list" in df.columns:
+        df["genres"] = df["genres_list"].fillna("").map(_parse_genres)
+    else:
+        df["genres"] = ""
+
+    if "num_pages" in df.columns:
+        df["num_pages"] = pd.to_numeric(df["num_pages"], errors="coerce")
+    else:
+        df["num_pages"] = pd.NA
+
+    if "original_publication_year" in df.columns:
+        df["original_publication_year"] = pd.to_numeric(
+            df["original_publication_year"], errors="coerce"
+        )
+    else:
+        df["original_publication_year"] = pd.NA
+
+    if "avg_rating" in df.columns:
+        df["avg_rating"] = pd.to_numeric(df["avg_rating"], errors="coerce")
+    else:
+        df["avg_rating"] = pd.NA
+
+    if "ratings_count" in df.columns:
+        df["ratings_count"] = pd.to_numeric(df["ratings_count"], errors="coerce")
+    else:
+        df["ratings_count"] = pd.NA
+
+    if "author" not in df.columns:
+        df["author"] = ""
+    else:
+        df["author"] = df["author"].fillna("").astype(str).str.strip()
+
+    if "image_url" not in df.columns:
+        df["image_url"] = ""
+
+    df["original_title"] = df["original_title"].fillna("Unknown Title").astype(str).str.strip()
+    df["description"] = df["description"].fillna("").astype(str).str.strip()
+    df = df[df["description"] != ""].reset_index(drop=True)
+    return df
+
+
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
-
-    # Genres: strip whitespace from each genre value
-    df['genres'] = df['genres'].fillna('')
-
-    # Pages: coerce to numeric, drop unresolvable
-    df['num_pages'] = pd.to_numeric(df['num_pages'], errors='coerce')
-
-    # Publication year: coerce to int where possible
-    df['original_publication_year'] = pd.to_numeric(
-        df['original_publication_year'], errors='coerce'
-    )
-
-    # Ratings
-    df['avg_rating'] = pd.to_numeric(df['avg_rating'], errors='coerce')
-    df['ratings_count'] = pd.to_numeric(df['ratings_count'], errors='coerce')
-
-    return df
+    return _normalize_schema(df)
 
 
 @st.cache_data
@@ -75,6 +148,86 @@ def get_all_genres(df: pd.DataFrame) -> list:
         .tolist()
     )
     return sorted(genres)
+
+
+def _embedding_cache_paths(path: str, model_name: str) -> tuple[Path, Path]:
+    source_path = Path(path)
+    key = f"{source_path.stem}__{model_name.replace('/', '__')}"
+    return CACHE_DIR / f"{key}.npy", CACHE_DIR / f"{key}.json"
+
+
+@st.cache_resource(show_spinner=False)
+def get_sentence_model(model_name: str) -> object:
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(model_name)
+
+
+def build_path_token(path: str) -> str:
+    source_path = Path(path)
+    return f"{source_path.resolve()}::{source_path.stat().st_mtime_ns}"
+
+
+@st.cache_data(show_spinner=False)
+def get_semantic_index(path: str, model_name: str, source_token: str) -> tuple[pd.DataFrame, np.ndarray]:
+    df = load_data(path)
+    embeddings_path, meta_path = _embedding_cache_paths(path, model_name)
+
+    if embeddings_path.exists() and meta_path.exists():
+        return df, np.load(embeddings_path)
+
+    model = get_sentence_model(model_name)
+    embeddings = model.encode(
+        df["description"].tolist(),
+        batch_size=32,
+        show_progress_bar=True,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )
+
+    np.save(embeddings_path, embeddings)
+    meta_path.write_text(
+        pd.Series(
+            {
+                "path": path,
+                "model_name": model_name,
+                "source_token": source_token,
+                "rows": len(df),
+            }
+        ).to_json(indent=2),
+        encoding="utf-8",
+    )
+    return df, embeddings
+
+
+def search_books(
+    query_text: str,
+    df: pd.DataFrame,
+    embeddings: np.ndarray,
+    model_name: str,
+    top_n: int,
+    min_similarity: float,
+) -> pd.DataFrame:
+    query_text = query_text.strip()
+    if not query_text:
+        raise ValueError("Please enter a description to search.")
+
+    model = get_sentence_model(model_name)
+    query_embedding = model.encode(
+        [query_text],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )[0]
+
+    scores = embeddings @ query_embedding
+    ranked_indices = np.argsort(scores)[::-1]
+    ranked_indices = [idx for idx in ranked_indices if scores[idx] >= min_similarity]
+    top_indices = ranked_indices[:top_n]
+
+    results = df.iloc[top_indices].copy()
+    results["similarity"] = scores[top_indices]
+    results["rank"] = range(1, len(results) + 1)
+    return results.reset_index(drop=True)
 
 
 # ─────────────────────────────────────────────
@@ -131,6 +284,12 @@ def build_book_card_html(row: pd.Series) -> str:
     title  = html.escape(str(row.get('original_title', 'Unknown Title')))
     author = html.escape(str(row.get('author', 'Unknown Author')))
     rating = f"★ {row['avg_rating']:.2f}" if pd.notna(row.get('avg_rating')) else ''
+    similarity = row.get('similarity')
+    similarity_html = (
+        f'<p class="ov-score">Match {float(similarity):.3f}</p>'
+        if pd.notna(similarity)
+        else ''
+    )
 
     return f"""
     <div class="book-card">
@@ -140,6 +299,7 @@ def build_book_card_html(row: pd.Series) -> str:
                 <p class="ov-title">{title}</p>
                 <p class="ov-author">by {author}</p>
                 <p class="ov-rating">{rating}</p>
+                {similarity_html}
             </div>
         </div>
     </div>
@@ -212,6 +372,11 @@ def render_book_grid(results: pd.DataFrame):
         font-size: 0.65rem; color: #f0c060;
         font-weight: 600; margin: 0;
     }}
+    .ov-score {{
+        font-size: 0.62rem; color: #8fe3c4;
+        font-weight: 700; margin: 0.08rem 0 0;
+        letter-spacing: 0.02em;
+    }}
     </style>
     <div class="book-grid">{cards_html}</div>
     """
@@ -227,12 +392,42 @@ def render_book_grid(results: pd.DataFrame):
 # SIDEBAR
 # ─────────────────────────────────────────────
 def render_sidebar(df: pd.DataFrame) -> dict:
-    """Render all filter controls and return selected values as a dict."""
+    """Render all controls and return selected values as a dict."""
 
     with st.sidebar:
-        st.markdown("## 📖 Next Read")
+        st.markdown("## 📖 Book Matchmaker")
+        mode = st.radio(
+            "Mode",
+            options=["Browse", "Semantic search"],
+            horizontal=True,
+        )
+
+        dataset_label = st.selectbox(
+            "Corpus",
+            options=list(DATASETS.keys()),
+        )
+
         st.markdown("*Discover your next favourite book*")
         st.divider()
+
+        if mode == "Semantic search":
+            top_n = st.slider("Top matches", min_value=3, max_value=20, value=8)
+            min_similarity = st.slider(
+                "Minimum similarity",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.2,
+                step=0.01,
+                format="%.2f",
+            )
+            st.caption("Embeddings are cached per dataset and model.")
+            return {
+                "mode": mode,
+                "dataset_label": dataset_label,
+                "data_path": DATASETS[dataset_label],
+                "top_n": top_n,
+                "min_similarity": min_similarity,
+            }
 
         all_genres = get_all_genres(df)
         selected_genres = st.multiselect(
@@ -302,6 +497,9 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         )
 
     return {
+        "mode": mode,
+        "dataset_label": dataset_label,
+        "data_path": DATASETS[dataset_label],
         "selected_genres": selected_genres,
         "page_range": page_range,
         "year_range": year_range,
@@ -315,9 +513,9 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 # MAIN
 # ─────────────────────────────────────────────
 def main():
-    # ── Load data ──────────────────────────────
-    DATA_PATH = "data/thrillers.csv"
-    df = load_data(DATA_PATH)
+    # ── Default data ───────────────────────────
+    default_path = DATASETS["Thriller sample"]
+    df = load_data(default_path)
 
     # ── Pagination state ───────────────────────
     if "page" not in st.session_state:
@@ -326,8 +524,68 @@ def main():
     if "last_filters" not in st.session_state:
         st.session_state.last_filters = ""
 
+    if "last_mode" not in st.session_state:
+        st.session_state.last_mode = "Browse"
+
     # ── Sidebar filters ────────────────────────
     filters = render_sidebar(df)
+
+    data_path = filters["data_path"]
+    df = load_data(data_path)
+
+    if st.session_state.last_mode != filters["mode"]:
+        st.session_state.page = 1
+        st.session_state.last_mode = filters["mode"]
+
+    if filters["mode"] == "Semantic search":
+        st.markdown("## Semantic Search")
+        st.markdown(
+            "Paste a short description of a book you want to read, and the model will rank similar books from the selected corpus."
+        )
+
+        query_key = f"semantic_query::{filters['dataset_label']}"
+        if query_key not in st.session_state:
+            st.session_state[query_key] = ""
+
+        with st.form("semantic_search_form"):
+            query_text = st.text_area(
+                "Describe the book you want to read",
+                key=query_key,
+                height=160,
+                placeholder="Example: A dark psychological thriller with a missing person, hidden secrets, and a tense investigation.",
+            )
+            submitted = st.form_submit_button("Find matches", use_container_width=True)
+
+        if not submitted:
+            st.info("Enter a description and press Find matches to see the top semantic matches.")
+            return
+
+        if not query_text.strip():
+            st.warning("Please enter some text before searching.")
+            return
+
+        source_token = build_path_token(data_path)
+        df, embeddings = get_semantic_index(data_path, SEMANTIC_MODEL_NAME, source_token)
+        results = search_books(
+            query_text=query_text,
+            df=df,
+            embeddings=embeddings,
+            model_name=SEMANTIC_MODEL_NAME,
+            top_n=filters["top_n"],
+            min_similarity=filters["min_similarity"],
+        )
+
+        st.markdown(
+            f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description</p>',
+            unsafe_allow_html=True,
+        )
+
+        if results.empty:
+            st.info("No books cleared the similarity threshold. Try lowering the minimum similarity slider.")
+            return
+
+        render_book_grid(results)
+        return
 
     # ── Apply filters ──────────────────────────
     results = apply_filters(
