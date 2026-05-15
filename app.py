@@ -435,16 +435,19 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         st.markdown("*Discover your next favourite book*")
         st.divider()
 
-        # if mode == "Semantic search":
-        #     top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
-        #     min_similarity = st.slider(
-        #         "Minimum similarity",
-        #         min_value=0.0,
-        #         max_value=1.0,
-        #         value=0.2,
-        #         step=0.01,
-        #         format="%.2f",
-        #     )
+        if mode == "Semantic search":
+            # top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
+            # min_similarity = st.slider(
+            #     "Minimum similarity",
+            #     min_value=0.0,
+            #     max_value=1.0,
+            #     value=0.2,
+            #     step=0.01,
+            #     format="%.2f",
+            # )
+            
+            top_n = 5
+            min_similarity = 0.2
 
         all_genres = get_all_genres(df)
         selected_genres = st.multiselect(
@@ -528,8 +531,8 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
         # Add semantic search specific params
         if mode == "Semantic search":
-            result_dict["top_n"] = top_n if top_n else 5
-            result_dict["min_similarity"] = min_similarity if min_similarity else 0.2
+            result_dict["top_n"] = top_n
+            result_dict["min_similarity"] = min_similarity
 
         return result_dict
 
