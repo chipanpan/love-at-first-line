@@ -411,7 +411,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         st.divider()
 
         if mode == "Semantic search":
-            top_n = st.slider("Top matches", min_value=3, max_value=20, value=8)
+            top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
             min_similarity = st.slider(
                 "Minimum similarity",
                 min_value=0.0,
@@ -421,13 +421,6 @@ def render_sidebar(df: pd.DataFrame) -> dict:
                 format="%.2f",
             )
             st.caption("Embeddings are cached per dataset and model.")
-            return {
-                "mode": mode,
-                "dataset_label": dataset_label,
-                "data_path": DATASETS[dataset_label],
-                "top_n": top_n,
-                "min_similarity": min_similarity,
-            }
 
         all_genres = get_all_genres(df)
         selected_genres = st.multiselect(
@@ -496,17 +489,25 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             }[x],
         )
 
-    return {
-        "mode": mode,
-        "dataset_label": dataset_label,
-        "data_path": DATASETS[dataset_label],
-        "selected_genres": selected_genres,
-        "page_range": page_range,
-        "year_range": year_range,
-        "min_rating": min_rating,
-        "min_ratings_count": min_ratings_count,
-        "sort_by": sort_by,
-    }
+        # Prepare return dict
+        result_dict = {
+            "mode": mode,
+            "dataset_label": dataset_label,
+            "data_path": DATASETS[dataset_label],
+            "selected_genres": selected_genres,
+            "page_range": page_range,
+            "year_range": year_range,
+            "min_rating": min_rating,
+            "min_ratings_count": min_ratings_count,
+            "sort_by": sort_by,
+        }
+
+        # Add semantic search specific params
+        if mode == "Semantic search":
+            result_dict["top_n"] = top_n
+            result_dict["min_similarity"] = min_similarity
+
+        return result_dict
 
 
 # ─────────────────────────────────────────────
@@ -566,6 +567,8 @@ def main():
 
         source_token = build_path_token(data_path)
         df, embeddings = get_semantic_index(data_path, SEMANTIC_MODEL_NAME, source_token)
+        
+        # Get top N semantic matches
         results = search_books(
             query_text=query_text,
             df=df,
@@ -575,14 +578,31 @@ def main():
             min_similarity=filters["min_similarity"],
         )
 
+        if results.empty:
+            st.info("No books cleared the similarity threshold. Try lowering the minimum similarity slider.")
+            return
+
+        # Apply filters to semantic results
+        results = apply_filters(
+            results,
+            selected_genres=filters["selected_genres"],
+            page_range=filters["page_range"],
+            year_range=filters["year_range"],
+            min_rating=filters["min_rating"],
+            min_ratings_count=filters["min_ratings_count"],
+        )
+
         st.markdown(
-            f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description</p>',
+            f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description and filters</p>',
             unsafe_allow_html=True,
         )
 
         if results.empty:
-            st.info("No books cleared the similarity threshold. Try lowering the minimum similarity slider.")
+            st.info("No books match both the semantic search and your selected filters. Try adjusting your filters.")
             return
+
+        # Sort results
+        results = results.sort_values(filters["sort_by"], ascending=False)
 
         render_book_grid(results)
         return
