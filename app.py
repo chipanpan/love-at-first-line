@@ -435,17 +435,16 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         st.markdown("*Discover your next favourite book*")
         st.divider()
 
-        if mode == "Semantic search":
-            top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
-            min_similarity = st.slider(
-                "Minimum similarity",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.2,
-                step=0.01,
-                format="%.2f",
-            )
-            st.caption("Embeddings are cached per dataset and model.")
+        # if mode == "Semantic search":
+        #     top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
+        #     min_similarity = st.slider(
+        #         "Minimum similarity",
+        #         min_value=0.0,
+        #         max_value=1.0,
+        #         value=0.2,
+        #         step=0.01,
+        #         format="%.2f",
+        #     )
 
         all_genres = get_all_genres(df)
         selected_genres = st.multiselect(
@@ -529,8 +528,8 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
         # Add semantic search specific params
         if mode == "Semantic search":
-            result_dict["top_n"] = top_n
-            result_dict["min_similarity"] = min_similarity
+            result_dict["top_n"] = top_n if top_n else 5
+            result_dict["min_similarity"] = min_similarity if min_similarity else 0.2
 
         return result_dict
 
@@ -566,7 +565,7 @@ def main():
     if filters["mode"] == "Semantic search":
         st.markdown("## Semantic Search")
         st.markdown(
-            "Paste a short description of a book you want to read, and the model will rank similar books from the selected corpus."
+            "Write a short description of the book you want to read."
         )
 
         query_key = f"semantic_query::{filters['dataset_label']}"
@@ -579,6 +578,7 @@ def main():
                 key=query_key,
                 height=160,
                 placeholder="Example: A dark psychological thriller with a missing person, hidden secrets, and a tense investigation.",
+                label_visibility="hidden",
             )
             submitted = st.form_submit_button("Find matches", use_container_width=True)
 
@@ -604,7 +604,7 @@ def main():
         )
 
         if results.empty:
-            st.info("No books cleared the similarity threshold. Try lowering the minimum similarity slider.")
+            st.info("No books match your description.")
             return
 
         # Apply filters to semantic results
