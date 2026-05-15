@@ -283,6 +283,9 @@ def build_book_card_html(row: pd.Series) -> str:
 
     title  = html.escape(str(row.get('original_title', 'Unknown Title')))
     author = html.escape(str(row.get('author', 'Unknown Author')))
+    description = html.escape(str(row.get('description', '')))
+    if len(description) > 420:
+        description = f"{description[:417].rstrip()}..."
     rating = f"★ {row['avg_rating']:.2f}" if pd.notna(row.get('avg_rating')) else ''
     similarity = row.get('similarity')
     similarity_html = (
@@ -300,6 +303,7 @@ def build_book_card_html(row: pd.Series) -> str:
                 <p class="ov-author">by {author}</p>
                 <p class="ov-rating">{rating}</p>
                 {similarity_html}
+                <p class="ov-desc">{description}</p>
             </div>
         </div>
     </div>
@@ -357,6 +361,7 @@ def render_book_grid(results: pd.DataFrame):
         opacity: 0; transition: opacity 0.22s ease; border-radius: 8px;
     }}
     .book-card:hover .overlay {{ opacity: 1; }}
+    .book-card.show-overlay .overlay {{ opacity: 1; }}
     .ov-title {{
         font-size: 0.68rem; font-weight: 700; color: #fff;
         margin: 0 0 0.1rem; line-height: 1.3;
@@ -377,8 +382,28 @@ def render_book_grid(results: pd.DataFrame):
         font-weight: 700; margin: 0.08rem 0 0;
         letter-spacing: 0.02em;
     }}
+        .ov-desc {{
+                font-size: 0.6rem;
+                color: #e4e2f2;
+                line-height: 1.35;
+                margin-top: 0.3rem;
+                display: -webkit-box;
+                -webkit-line-clamp: 6;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+        }}
     </style>
-    <div class="book-grid">{cards_html}</div>
+        <div class="book-grid">{cards_html}</div>
+        <script>
+            (function () {{
+                const cards = document.querySelectorAll('.book-card');
+                cards.forEach((card) => {{
+                    card.addEventListener('click', () => {{
+                        card.classList.toggle('show-overlay');
+                    }});
+                }});
+            }})();
+        </script>
     """
     # With aspect-ratio 2/3, card height ≈ column width × 1.5
     # At 5 columns in ~700px container, each col ≈ 130px → card height ≈ 195px
