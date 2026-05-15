@@ -289,7 +289,7 @@ def build_book_card_html(row: pd.Series) -> str:
     rating = f"★ {row['avg_rating']:.2f}" if pd.notna(row.get('avg_rating')) else ''
     similarity = row.get('similarity')
     similarity_html = (
-        f'<p class="ov-score">Match {float(similarity):.3f}</p>'
+        f'<p class="ov-score">Match {float(similarity) * 100:.0f}%</p>'
         if pd.notna(similarity)
         else ''
     )
@@ -629,8 +629,8 @@ def main():
             st.info("No books match both the semantic search and your selected filters. Try adjusting your filters.")
             return
 
-        # Sort results
-        results = results.sort_values(filters["sort_by"], ascending=False)
+        # Semantic mode should rank by similarity first
+        results = results.sort_values("similarity", ascending=False)
 
         render_book_grid(results)
         return
