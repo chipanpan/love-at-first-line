@@ -421,6 +421,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
     with st.sidebar:
         st.markdown("## 📖 Book Matchmaker")
+        st.markdown("*Discover your next favourite book*")
         mode = st.radio(
             "Mode",
             options=["Browse", "Semantic search"],
@@ -432,7 +433,6 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             options=list(DATASETS.keys()),
         )
 
-        st.markdown("*Discover your next favourite book*")
         st.divider()
 
         if mode == "Semantic search":
