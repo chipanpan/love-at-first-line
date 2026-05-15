@@ -44,12 +44,22 @@ st.markdown("""
 # DATA + MODEL CONFIG
 # ─────────────────────────────────────────────
 DATASETS = {
-    "Thriller sample": "data/thrillers.csv",
-    "Full catalog": "data/books_dataset.csv",
+    "thrillers.csv": "data/thrillers.csv",
+    "books_dataset.csv": "data/books_dataset.csv",
+    "200thrillers.csv": "data/200thrillers.csv",
 }
 SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+CACHED_200THRILLERS_MODELS = {
+    "all-MiniLM-L6-v2": "all-MiniLM-L6-v2",
+    "BAAI/bge-small-en-v1.5": "BAAI/bge-small-en-v1.5",
+    "sentence-transformers/all-mpnet-base-v2": "sentence-transformers/all-mpnet-base-v2",
+}
+CACHED_200THRILLERS_DATASET = DATASETS["200thrillers.csv"]
+CACHED_200THRILLERS_PATH = Path(CACHED_200THRILLERS_DATASET).resolve()
 CACHE_DIR = Path(".cache/book_matchmaker")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+BOOK_SIMILARITY_CACHE_DIR = Path(".cache/book_similarity")
+BOOK_SIMILARITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ─────────────────────────────────────────────
@@ -152,8 +162,12 @@ def get_all_genres(df: pd.DataFrame) -> list:
 
 def _embedding_cache_paths(path: str, model_name: str) -> tuple[Path, Path]:
     source_path = Path(path)
+    if source_path.resolve() == CACHED_200THRILLERS_PATH:
+        cache_dir = BOOK_SIMILARITY_CACHE_DIR
+    else:
+        cache_dir = CACHE_DIR
     key = f"{source_path.stem}__{model_name.replace('/', '__')}"
-    return CACHE_DIR / f"{key}.npy", CACHE_DIR / f"{key}.json"
+    return cache_dir / f"{key}.npy", cache_dir / f"{key}.json"
 
 
 @st.cache_resource(show_spinner=False)
@@ -423,7 +437,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         st.markdown("## 📖 Book Matchmaker")
         st.markdown("*Discover your next favourite book*")
         mode = st.radio(
-            "Mode",
+            "MODE",
             options=["Browse", "Semantic search"],
             horizontal=True,
         )
@@ -431,11 +445,28 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         dataset_label = st.selectbox(
             "Corpus",
             options=list(DATASETS.keys()),
+            index=list(DATASETS.keys()).index("200thrillers.csv"),
         )
+
+        active_df = load_data(DATASETS[dataset_label])
 
         st.divider()
 
+        semantic_model_label = SEMANTIC_MODEL_NAME
+        semantic_model_name = SEMANTIC_MODEL_NAME
+
         if mode == "Semantic search":
+            if dataset_label == "200thrillers.csv":
+                semantic_model_label = st.selectbox(
+                    "Embedding model",
+                    options=list(CACHED_200THRILLERS_MODELS.keys()),
+                    index=0,
+                )
+                semantic_model_name = CACHED_200THRILLERS_MODELS[semantic_model_label]
+            else:
+                semantic_model_label = SEMANTIC_MODEL_NAME
+                semantic_model_name = SEMANTIC_MODEL_NAME
+
             # top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
             # min_similarity = st.slider(
             #     "Minimum similarity",
@@ -449,7 +480,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             top_n = 5
             min_similarity = 0.2
 
-        all_genres = get_all_genres(df)
+        all_genres = get_all_genres(active_df)
         selected_genres = st.multiselect(
             "Genres",
             options=all_genres,
@@ -458,7 +489,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
         st.markdown("---")
 
-        valid_pages = df['num_pages'].dropna()
+        valid_pages = active_df['num_pages'].dropna()
         page_min = int(valid_pages.min()) if not valid_pages.empty else 1
         page_max = int(valid_pages.max()) if not valid_pages.empty else 2000
         page_range = st.slider(
@@ -470,7 +501,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
         st.markdown("---")
 
-        valid_years = df['original_publication_year'].dropna()
+        valid_years = active_df['original_publication_year'].dropna()
         year_min = int(valid_years.min()) if not valid_years.empty else 0
         year_max = int(valid_years.max()) if not valid_years.empty else 2025
         year_range = st.slider(
@@ -482,7 +513,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
         st.markdown("---")
 
-        valid_ratings = df['avg_rating'].dropna()
+        valid_ratings = active_df['avg_rating'].dropna()
         rating_min = float(valid_ratings.min()) if not valid_ratings.empty else 0.0
         rating_max = float(valid_ratings.max()) if not valid_ratings.empty else 5.0
         min_rating = st.slider(
@@ -521,6 +552,8 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             "mode": mode,
             "dataset_label": dataset_label,
             "data_path": DATASETS[dataset_label],
+            "semantic_model_label": semantic_model_label,
+            "semantic_model_name": semantic_model_name,
             "selected_genres": selected_genres,
             "page_range": page_range,
             "year_range": year_range,
@@ -542,7 +575,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────
 def main():
     # ── Default data ───────────────────────────
-    default_path = DATASETS["Thriller sample"]
+    default_path = DATASETS["200thrillers.csv"]
     df = load_data(default_path)
 
     # ── Pagination state ───────────────────────
@@ -571,7 +604,7 @@ def main():
             "Write a short description of the book you want to read."
         )
 
-        query_key = f"semantic_query::{filters['dataset_label']}"
+        query_key = f"semantic_query::{filters['dataset_label']}::{filters['semantic_model_label']}"
         if query_key not in st.session_state:
             st.session_state[query_key] = ""
 
@@ -594,14 +627,18 @@ def main():
             return
 
         source_token = build_path_token(data_path)
-        df, embeddings = get_semantic_index(data_path, SEMANTIC_MODEL_NAME, source_token)
+        df, embeddings = get_semantic_index(
+            data_path,
+            filters["semantic_model_name"],
+            source_token,
+        )
         
         # Get top N semantic matches
         results = search_books(
             query_text=query_text,
             df=df,
             embeddings=embeddings,
-            model_name=SEMANTIC_MODEL_NAME,
+            model_name=filters["semantic_model_name"],
             top_n=filters["top_n"],
             min_similarity=filters["min_similarity"],
         )
