@@ -281,11 +281,12 @@ def build_book_card_html(row: pd.Series) -> str:
     else:
         cover_html = '<div class="cover-fallback">📖</div>'
 
-    title  = html.escape(str(row.get('original_title', 'Unknown Title')))
+    title = html.escape(str(row.get('original_title', 'Unknown Title')))
     author = html.escape(str(row.get('author', 'Unknown Author')))
-    description = html.escape(str(row.get('description', '')))
-    if len(description) > 420:
-        description = f"{description[:417].rstrip()}..."
+    full_description = html.escape(str(row.get('description', '')))
+    short_description = full_description
+    if len(short_description) > 420:
+        short_description = f"{short_description[:417].rstrip()}..."
     rating = f"★ {row['avg_rating']:.2f}" if pd.notna(row.get('avg_rating')) else ''
     similarity = row.get('similarity')
     similarity_html = (
@@ -293,17 +294,26 @@ def build_book_card_html(row: pd.Series) -> str:
         if pd.notna(similarity)
         else ''
     )
+    genres = html.escape(str(row.get('genres', '')))
+    num_pages = int(row['num_pages']) if pd.notna(row.get('num_pages')) else ''
+    year = int(row['original_publication_year']) if pd.notna(row.get('original_publication_year')) else ''
+    avg_rating_val = row.get('avg_rating')
+    avg_rating = f"{avg_rating_val:.2f}" if pd.notna(avg_rating_val) else ''
+    ratings_count = int(row['ratings_count']) if pd.notna(row.get('ratings_count')) else ''
 
     return f"""
     <div class="book-card">
-        <div class="cover-wrap">
+        <div class="cover-wrap" data-title="{title}" data-author="{author}"
+             data-genres="{genres}" data-pages="{num_pages}" data-year="{year}"
+             data-rating="{avg_rating}" data-ratings_count="{ratings_count}"
+             data-description="{full_description}">
             {cover_html}
             <div class="overlay">
                 <p class="ov-title">{title}</p>
                 <p class="ov-author">by {author}</p>
                 <p class="ov-rating">{rating}</p>
                 {similarity_html}
-                <p class="ov-desc">{description}</p>
+                <p class="ov-desc">{short_description}</p>
             </div>
         </div>
     </div>
@@ -314,7 +324,7 @@ def render_book_grid(results: pd.DataFrame):
     cards_html = ''.join(
         build_book_card_html(row) for _, row in results.iterrows()
     )
-    full_html = f"""
+    full_html = """
     <style>
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
     body {{ background: transparent; font-family: sans-serif; }}
@@ -394,22 +404,79 @@ def render_book_grid(results: pd.DataFrame):
         }}
     </style>
         <div class="book-grid">{cards_html}</div>
+
+        <div id="book-details" class="book-details" style="display:none; margin-top:12px;">
+            <div class="details-header" id="details-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
+                <div class="details-title" id="details-title">Title by Author</div>
+                <div id="details-toggle-symbol">▾</div>
+            </div>
+            <div class="details-body" id="details-body" style="margin-top:8px;">
+                <ul style="margin:0 0 8px 1rem;">
+                    <li><strong>Genres:</strong> <span id="detail-genres"></span></li>
+                    <li><strong>Pages:</strong> <span id="detail-pages"></span></li>
+                    <li><strong>Year:</strong> <span id="detail-year"></span></li>
+                    <li><strong>Rating:</strong> <span id="detail-rating"></span> out of <span id="detail-ratings-count"></span> ratings</li>
+                </ul>
+                <div class="details-desc" id="detail-desc"></div>
+            </div>
+        </div>
+
         <script>
-            (function () {{
+            (function () {
                 const cards = document.querySelectorAll('.book-card');
-                cards.forEach((card) => {{
-                    card.addEventListener('click', () => {{
+                const details = document.getElementById('book-details');
+                const detailsTitle = document.getElementById('details-title');
+                const detailGenres = document.getElementById('detail-genres');
+                const detailPages = document.getElementById('detail-pages');
+                const detailYear = document.getElementById('detail-year');
+                const detailRating = document.getElementById('detail-rating');
+                const detailRatingsCount = document.getElementById('detail-ratings-count');
+                const detailDesc = document.getElementById('detail-desc');
+
+                let currentCard = null;
+
+                function showDetailsFromCover(cover) {
+                    const d = cover.dataset || {};
+                    detailsTitle.textContent = (d.title || '') + ' by ' + (d.author || '');
+                    detailGenres.textContent = d.genres || '—';
+                    detailPages.textContent = d.pages || '—';
+                    detailYear.textContent = d.year || '—';
+                    detailRating.textContent = d.rating || '—';
+                    detailRatingsCount.textContent = d.ratings_count || '—';
+                    detailDesc.textContent = d.description || '';
+                    details.style.display = 'block';
+                    details.scrollIntoView({behavior: 'smooth', block: 'end'});
+                }
+
+                cards.forEach(function(card) {
+                    const cover = card.querySelector('.cover-wrap');
+                    card.addEventListener('click', function () {
                         card.classList.toggle('show-overlay');
-                    }});
-                }});
-            }})();
+                        if (currentCard === card) {
+                            details.style.display = details.style.display === 'none' ? 'block' : 'none';
+                            currentCard = details.style.display === 'none' ? null : card;
+                        } else {
+                            currentCard = card;
+                            showDetailsFromCover(cover);
+                        }
+                    });
+                });
+
+                document.getElementById('details-header').addEventListener('click', function () {
+                    if (!details) return;
+                    details.style.display = details.style.display === 'none' ? 'block' : 'none';
+                });
+            })();
         </script>
     """
     # With aspect-ratio 2/3, card height ≈ column width × 1.5
     # At 5 columns in ~700px container, each col ≈ 130px → card height ≈ 195px
+    # inject cards HTML
+    full_html = full_html.replace('{cards_html}', cards_html)
+
     n_cols = 5
     n_rows = max(1, -(-len(results) // n_cols))  # ceiling division
-    estimated_height = n_rows * 215 + 40 # 195px card + 20px gap
+    estimated_height = n_rows * 215 + 220 # card height + details pane
     components.html(full_html, height=estimated_height, scrolling=False)
 
 
