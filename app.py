@@ -28,6 +28,18 @@ st.markdown("""
     [data-testid="stSidebar"] * {
         color: #754215 !important;
     }
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] [role="option"],
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"],
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] * {
+        background-color: #754215 !important;
+        color: #f8f3e6 !important;
+    }
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] input,
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] textarea,
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] [contenteditable="true"] {
+        color: #754215 !important;
+        -webkit-text-fill-color: #754215 !important;
+    }
     [data-testid="stSidebar"] .stSlider label,
     [data-testid="stSidebar"] .stMultiSelect label,
     [data-testid="stSidebar"] .stSelectbox label {
@@ -55,7 +67,8 @@ CACHED_200THRILLERS_MODELS = {
     "sentence-transformers/all-mpnet-base-v2": "sentence-transformers/all-mpnet-base-v2",
 }
 CACHED_200THRILLERS_DATASET = DATASETS["200thrillers.csv"]
-CACHED_200THRILLERS_PATH = Path(CACHED_200THRILLERS_DATASET).resolve()
+CACHED_BOOKS_DATASET = DATASETS["books_dataset.csv"]
+CACHED_BOOKS_DATASET_PATH = Path(CACHED_BOOKS_DATASET).resolve()
 CACHE_DIR = Path(".cache/book_matchmaker")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 BOOK_SIMILARITY_CACHE_DIR = Path(".cache/book_similarity")
@@ -162,7 +175,7 @@ def get_all_genres(df: pd.DataFrame) -> list:
 
 def _embedding_cache_paths(path: str, model_name: str) -> tuple[Path, Path]:
     source_path = Path(path)
-    if source_path.resolve() == CACHED_200THRILLERS_PATH:
+    if source_path.resolve() == CACHED_BOOKS_DATASET_PATH:
         cache_dir = BOOK_SIMILARITY_CACHE_DIR
     else:
         cache_dir = CACHE_DIR
@@ -280,6 +293,24 @@ def apply_filters(
     # Minimum popularity (ratings count)
     mask &= (df['ratings_count'].fillna(0) >= min_ratings_count)
 
+    return df[mask].copy()
+
+
+def apply_text_search(
+    df: pd.DataFrame,
+    search_text: str,
+    search_field: str,
+) -> pd.DataFrame:
+    search_text = search_text.strip()
+    if not search_text:
+        return df.copy()
+
+    field_map = {
+        "Title": "original_title",
+        "Author": "author",
+    }
+    column_name = field_map.get(search_field, "original_title")
+    mask = df[column_name].fillna("").astype(str).str.contains(search_text, case=False, na=False)
     return df[mask].copy()
 
 
@@ -442,13 +473,16 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             horizontal=True,
         )
 
-        dataset_label = st.selectbox(
-            "Corpus",
-            options=list(DATASETS.keys()),
-            index=list(DATASETS.keys()).index("200thrillers.csv"),
-        )
-
-        active_df = load_data(DATASETS[dataset_label])
+        if mode == "Browse":
+            dataset_label = st.selectbox(
+                "Corpus",
+                options=list(DATASETS.keys()),
+                index=list(DATASETS.keys()).index("200thrillers.csv"),
+            )
+            active_df = load_data(DATASETS[dataset_label])
+        else:
+            dataset_label = "books_dataset.csv"
+            active_df = load_data(DATASETS[dataset_label])
 
         st.divider()
 
@@ -456,16 +490,12 @@ def render_sidebar(df: pd.DataFrame) -> dict:
         semantic_model_name = SEMANTIC_MODEL_NAME
 
         if mode == "Semantic search":
-            if dataset_label == "200thrillers.csv":
-                semantic_model_label = st.selectbox(
-                    "Embedding model",
-                    options=list(CACHED_200THRILLERS_MODELS.keys()),
-                    index=0,
-                )
-                semantic_model_name = CACHED_200THRILLERS_MODELS[semantic_model_label]
-            else:
-                semantic_model_label = SEMANTIC_MODEL_NAME
-                semantic_model_name = SEMANTIC_MODEL_NAME
+            semantic_model_label = st.selectbox(
+                "Embedding model",
+                options=list(CACHED_200THRILLERS_MODELS.keys()),
+                index=0,
+            )
+            semantic_model_name = CACHED_200THRILLERS_MODELS[semantic_model_label]
 
             # top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
             # min_similarity = st.slider(
@@ -479,6 +509,16 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             
             top_n = 5
             min_similarity = 0.2
+        else:
+            search_field = st.selectbox(
+                "Search by",
+                options=["Title", "Author"],
+                index=0,
+            )
+            search_text = st.text_input(
+                "Search text",
+                placeholder="Type part of a title or author name",
+            )
 
         all_genres = get_all_genres(active_df)
         selected_genres = st.multiselect(
@@ -562,6 +602,10 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             "sort_by": sort_by,
         }
 
+        if mode == "Browse":
+            result_dict["search_field"] = search_field
+            result_dict["search_text"] = search_text
+
         # Add semantic search specific params
         if mode == "Semantic search":
             result_dict["top_n"] = top_n
@@ -604,7 +648,8 @@ def main():
             "Write a short description of the book you want to read."
         )
 
-        query_key = f"semantic_query::{filters['dataset_label']}::{filters['semantic_model_label']}"
+        semantic_data_path = DATASETS["books_dataset.csv"]
+        query_key = f"semantic_query::books_dataset.csv::{filters['semantic_model_label']}"
         if query_key not in st.session_state:
             st.session_state[query_key] = ""
 
@@ -626,9 +671,9 @@ def main():
             st.warning("Please enter some text before searching.")
             return
 
-        source_token = build_path_token(data_path)
+        source_token = build_path_token(semantic_data_path)
         df, embeddings = get_semantic_index(
-            data_path,
+            semantic_data_path,
             filters["semantic_model_name"],
             source_token,
         )
@@ -680,6 +725,12 @@ def main():
         year_range=filters["year_range"],
         min_rating=filters["min_rating"],
         min_ratings_count=filters["min_ratings_count"],
+    )
+
+    results = apply_text_search(
+        results,
+        search_text=filters.get("search_text", ""),
+        search_field=filters.get("search_field", "Title"),
     )
 
     # ── Sort ───────────────────────────────────
