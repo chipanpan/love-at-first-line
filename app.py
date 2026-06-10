@@ -328,7 +328,8 @@ def build_book_card_html(row: pd.Series) -> str:
 
     title  = html.escape(str(row.get('original_title', 'Unknown Title')))
     author = html.escape(str(row.get('author', 'Unknown Author')))
-    description = html.escape(str(row.get('description', '')))
+    description_full = html.escape(str(row.get('description', '')))
+    description = description_full
     if len(description) > 420:
         description = f"{description[:417].rstrip()}..."
     rating = f"★ {row['avg_rating']:.2f}" if pd.notna(row.get('avg_rating')) else ''
@@ -340,7 +341,7 @@ def build_book_card_html(row: pd.Series) -> str:
     )
 
     return f"""
-    <div class="book-card">
+    <div class="book-card" title="{description_full}">
         <div class="cover-wrap">
             {cover_html}
             <div class="overlay">
@@ -376,6 +377,7 @@ def render_book_grid(results: pd.DataFrame):
         aspect-ratio: 2 / 3;
         box-shadow: 3px 5px 14px rgba(0,0,0,0.18);
         transition: transform 0.22s ease, box-shadow 0.22s ease;
+        cursor: help;
     }}
     .book-card:hover {{
         transform: translateY(-6px) scale(1.03);
