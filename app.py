@@ -475,16 +475,8 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             horizontal=True,
         )
 
-        if mode == "Browse":
-            dataset_label = st.selectbox(
-                "Corpus",
-                options=list(DATASETS.keys()),
-                index=list(DATASETS.keys()).index("200thrillers.csv"),
-            )
-            active_df = load_data(DATASETS[dataset_label])
-        else:
-            dataset_label = "books_dataset.csv"
-            active_df = load_data(DATASETS[dataset_label])
+        dataset_label = "books_dataset.csv"
+        active_df = load_data(DATASETS[dataset_label])
 
         st.divider()
 
@@ -509,7 +501,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             #     format="%.2f",
             # )
             
-            top_n = 5
+            top_n = 10
             min_similarity = 0.2
         else:
             search_field = st.selectbox(
@@ -621,7 +613,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────
 def main():
     # ── Default data ───────────────────────────
-    default_path = DATASETS["200thrillers.csv"]
+    default_path = DATASETS["books_dataset.csv"]
     df = load_data(default_path)
 
     # ── Pagination state ───────────────────────
@@ -679,12 +671,27 @@ def main():
             filters["semantic_model_name"],
             source_token,
         )
+
+        filtered_df = apply_filters(
+            df,
+            selected_genres=filters["selected_genres"],
+            page_range=filters["page_range"],
+            year_range=filters["year_range"],
+            min_rating=filters["min_rating"],
+            min_ratings_count=filters["min_ratings_count"],
+        )
+
+        if filtered_df.empty:
+            st.info("No books match your selected filters.")
+            return
+
+        filtered_embeddings = embeddings[filtered_df.index.to_numpy()]
         
-        # Get top N semantic matches
+        # Apply sidebar filters before semantic ranking
         results = search_books(
             query_text=query_text,
-            df=df,
-            embeddings=embeddings,
+            df=filtered_df,
+            embeddings=filtered_embeddings,
             model_name=filters["semantic_model_name"],
             top_n=filters["top_n"],
             min_similarity=filters["min_similarity"],
@@ -693,16 +700,6 @@ def main():
         if results.empty:
             st.info("No books match your description.")
             return
-
-        # Apply filters to semantic results
-        results = apply_filters(
-            results,
-            selected_genres=filters["selected_genres"],
-            page_range=filters["page_range"],
-            year_range=filters["year_range"],
-            min_rating=filters["min_rating"],
-            min_ratings_count=filters["min_ratings_count"],
-        )
 
         st.markdown(
             f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description and filters</p>',

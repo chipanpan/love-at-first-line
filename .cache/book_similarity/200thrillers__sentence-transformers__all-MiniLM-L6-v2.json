@@ -1,6 +1,0 @@
-{
-  "model_name": "sentence-transformers/all-MiniLM-L6-v2",
-  "source_path": "data\\200thrillers.csv",
-  "rows": 200,
-  "text_column": "description"
-}

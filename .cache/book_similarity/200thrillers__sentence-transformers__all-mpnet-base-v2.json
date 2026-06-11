@@ -1,6 +1,0 @@
-{
-  "model_name": "sentence-transformers/all-mpnet-base-v2",
-  "source_path": "200thrillers.csv",
-  "rows": 200,
-  "text_column": "description"
-}
