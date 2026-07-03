@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 # PAGE CONFIG
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Book Matchmaker",
+    page_title="Book Match",
     page_icon="📖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -453,7 +453,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
     with st.sidebar:
         st.markdown("## 📖 Book Matchmaker")
-        st.markdown("*Discover your next favourite book*")
+        st.markdown("*Discover your next reads*")
 
         dataset_label = "books_dataset.csv"
         active_df = load_data(DATASETS[dataset_label])
