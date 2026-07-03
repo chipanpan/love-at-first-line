@@ -56,17 +56,9 @@ st.markdown("""
 # DATA + MODEL CONFIG
 # ─────────────────────────────────────────────
 DATASETS = {
-    "thrillers.csv": "data/thrillers.csv",
     "books_dataset.csv": "data/books_dataset.csv",
-    "200thrillers.csv": "data/200thrillers.csv",
 }
-SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-CACHED_200THRILLERS_MODELS = {
-    "all-MiniLM-L6-v2": "all-MiniLM-L6-v2",
-    "BAAI/bge-small-en-v1.5": "BAAI/bge-small-en-v1.5",
-    "sentence-transformers/all-mpnet-base-v2": "sentence-transformers/all-mpnet-base-v2",
-}
-CACHED_200THRILLERS_DATASET = DATASETS["200thrillers.csv"]
+SEMANTIC_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 CACHED_BOOKS_DATASET = DATASETS["books_dataset.csv"]
 CACHED_BOOKS_DATASET_PATH = Path(CACHED_BOOKS_DATASET).resolve()
 CACHE_DIR = Path(".cache/book_matchmaker")
@@ -263,8 +255,8 @@ def search_books(
 def apply_filters(
     df: pd.DataFrame,
     selected_genres: list,
-    page_range: tuple,
-    year_range: tuple,
+    selected_length_categories: list,
+    selected_publication_eras: list,
     min_rating: float,
     min_ratings_count: int,
 ) -> pd.DataFrame:
@@ -278,14 +270,13 @@ def apply_filters(
         )
         mask &= genre_mask
 
-    # Page length filter
-    if df['num_pages'].notna().any():
-        mask &= (df['num_pages'].fillna(0).between(page_range[0], page_range[1]))
+    # Length category filter
+    if selected_length_categories:
+        mask &= df['length_category'].isin(selected_length_categories)
 
-    # Publication year range
-    mask &= (
-        df['original_publication_year'].fillna(0).between(year_range[0], year_range[1])
-    )
+    # Publication era filter
+    if selected_publication_eras:
+        mask &= df['publication_era'].isin(selected_publication_eras)
 
     # Minimum average rating
     mask &= (df['avg_rating'].fillna(0) >= min_rating)
@@ -296,22 +287,7 @@ def apply_filters(
     return df[mask].copy()
 
 
-def apply_text_search(
-    df: pd.DataFrame,
-    search_text: str,
-    search_field: str,
-) -> pd.DataFrame:
-    search_text = search_text.strip()
-    if not search_text:
-        return df.copy()
 
-    field_map = {
-        "Title": "original_title",
-        "Author": "author",
-    }
-    column_name = field_map.get(search_field, "original_title")
-    mask = df[column_name].fillna("").astype(str).str.contains(search_text, case=False, na=False)
-    return df[mask].copy()
 
 
 # ─────────────────────────────────────────────
@@ -466,83 +442,56 @@ def render_book_grid(results: pd.DataFrame):
 def render_sidebar(df: pd.DataFrame) -> dict:
     """Render all controls and return selected values as a dict."""
 
+    # Mapping for display names to actual category values
+    LENGTH_CATEGORY_MAPPING = {
+        "Short": "Day Trip",
+        "Medium": "Long Weekend",
+        "Long": "Epic Journey",
+    }
+    DISPLAY_TO_ACTUAL = LENGTH_CATEGORY_MAPPING
+    ACTUAL_TO_DISPLAY = {v: k for k, v in LENGTH_CATEGORY_MAPPING.items()}
+
     with st.sidebar:
         st.markdown("## 📖 Book Matchmaker")
         st.markdown("*Discover your next favourite book*")
-        mode = st.radio(
-            "MODE",
-            options=["Browse", "Semantic search"],
-            horizontal=True,
-        )
 
         dataset_label = "books_dataset.csv"
         active_df = load_data(DATASETS[dataset_label])
 
         st.divider()
 
-        semantic_model_label = SEMANTIC_MODEL_NAME
         semantic_model_name = SEMANTIC_MODEL_NAME
-
-        if mode == "Semantic search":
-            semantic_model_label = st.selectbox(
-                "Embedding model",
-                options=list(CACHED_200THRILLERS_MODELS.keys()),
-                index=0,
-            )
-            semantic_model_name = CACHED_200THRILLERS_MODELS[semantic_model_label]
-
-            # top_n = st.slider("Top matches", min_value=3, max_value=50, value=8)
-            # min_similarity = st.slider(
-            #     "Minimum similarity",
-            #     min_value=0.0,
-            #     max_value=1.0,
-            #     value=0.2,
-            #     step=0.01,
-            #     format="%.2f",
-            # )
-            
-            top_n = 10
-            min_similarity = 0.2
-        else:
-            search_field = st.selectbox(
-                "Search by",
-                options=["Title", "Author"],
-                index=0,
-            )
-            search_text = st.text_input(
-                "Search text",
-                placeholder="Type part of a title or author name",
-            )
+        top_n = 10
+        min_similarity = 0.2
 
         all_genres = get_all_genres(active_df)
         selected_genres = st.multiselect(
             "Genres",
             options=all_genres,
-            placeholder="Select all genres",
+            placeholder="Select genres",
         )
 
         st.markdown("---")
 
-        valid_pages = active_df['num_pages'].dropna()
-        page_min = int(valid_pages.min()) if not valid_pages.empty else 1
-        page_max = int(valid_pages.max()) if not valid_pages.empty else 2000
-        page_range = st.slider(
-            "Page Range",
-            min_value=page_min,
-            max_value=page_max,
-            value=(page_min, page_max),
+        # Length category filter (with renamed display)
+        length_categories = sorted(active_df['length_category'].dropna().unique())
+        display_length_categories = sorted([ACTUAL_TO_DISPLAY.get(cat, cat) for cat in length_categories])
+        selected_display_lengths = st.multiselect(
+            "Book Length",
+            options=display_length_categories,
+            placeholder="Select book lengths",
         )
+        # Convert display names back to actual values
+        selected_length_categories = [DISPLAY_TO_ACTUAL[d] for d in selected_display_lengths]
 
         st.markdown("---")
 
-        valid_years = active_df['original_publication_year'].dropna()
-        year_min = int(valid_years.min()) if not valid_years.empty else 0
-        year_max = int(valid_years.max()) if not valid_years.empty else 2025
-        year_range = st.slider(
-            "Publication Year",
-            min_value=year_min,
-            max_value=year_max,
-            value=(year_min, year_max),
+        # Publication era filter
+        publication_eras = sorted(active_df['publication_era'].dropna().unique())
+        selected_publication_eras = st.multiselect(
+            "Publication Era",
+            options=publication_eras,
+            placeholder="Select publication eras",
         )
 
         st.markdown("---")
@@ -568,42 +517,19 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             format_func=lambda x: f"{x:,} ratings" if x > 0 else "Any",
         )
 
-        st.markdown("---")
-
-        sort_by = st.selectbox(
-            "Sort results by",
-            options=["avg_rating", "ratings_count", "original_publication_year", "num_pages"],
-            format_func=lambda x: {
-                "avg_rating": "⭐ Rating",
-                "ratings_count": "🔥 Popularity",
-                "original_publication_year": "📅 Year",
-                "num_pages": "📄 Length",
-            }[x],
-        )
-
         # Prepare return dict
         result_dict = {
-            "mode": mode,
             "dataset_label": dataset_label,
             "data_path": DATASETS[dataset_label],
-            "semantic_model_label": semantic_model_label,
             "semantic_model_name": semantic_model_name,
             "selected_genres": selected_genres,
-            "page_range": page_range,
-            "year_range": year_range,
+            "selected_length_categories": selected_length_categories,
+            "selected_publication_eras": selected_publication_eras,
             "min_rating": min_rating,
             "min_ratings_count": min_ratings_count,
-            "sort_by": sort_by,
+            "top_n": top_n,
+            "min_similarity": min_similarity,
         }
-
-        if mode == "Browse":
-            result_dict["search_field"] = search_field
-            result_dict["search_text"] = search_text
-
-        # Add semantic search specific params
-        if mode == "Semantic search":
-            result_dict["top_n"] = top_n
-            result_dict["min_similarity"] = min_similarity
 
         return result_dict
 
@@ -616,183 +542,83 @@ def main():
     default_path = DATASETS["books_dataset.csv"]
     df = load_data(default_path)
 
-    # ── Pagination state ───────────────────────
-    if "page" not in st.session_state:
-        st.session_state.page = 1
-
-    if "last_filters" not in st.session_state:
-        st.session_state.last_filters = ""
-
-    if "last_mode" not in st.session_state:
-        st.session_state.last_mode = "Browse"
-
     # ── Sidebar filters ────────────────────────
     filters = render_sidebar(df)
 
-    data_path = filters["data_path"]
-    df = load_data(data_path)
+    # ── Semantic search ───────────────────────────
+    st.markdown("## Semantic Search")
+    st.markdown(
+        "Write a short description of the book you want to read."
+    )
 
-    if st.session_state.last_mode != filters["mode"]:
-        st.session_state.page = 1
-        st.session_state.last_mode = filters["mode"]
+    semantic_data_path = DATASETS["books_dataset.csv"]
+    query_key = "semantic_query::books_dataset.csv"
+    if query_key not in st.session_state:
+        st.session_state[query_key] = ""
 
-    if filters["mode"] == "Semantic search":
-        st.markdown("## Semantic Search")
-        st.markdown(
-            "Write a short description of the book you want to read."
+    with st.form("semantic_search_form"):
+        query_text = st.text_area(
+            "Describe the book you want to read",
+            key=query_key,
+            height=160,
+            placeholder="Example: A dark psychological thriller with a missing person, hidden secrets, and a tense investigation.",
+            label_visibility="hidden",
         )
+        submitted = st.form_submit_button("Find matches", use_container_width=True)
 
-        semantic_data_path = DATASETS["books_dataset.csv"]
-        query_key = f"semantic_query::books_dataset.csv::{filters['semantic_model_label']}"
-        if query_key not in st.session_state:
-            st.session_state[query_key] = ""
-
-        with st.form("semantic_search_form"):
-            query_text = st.text_area(
-                "Describe the book you want to read",
-                key=query_key,
-                height=160,
-                placeholder="Example: A dark psychological thriller with a missing person, hidden secrets, and a tense investigation.",
-                label_visibility="hidden",
-            )
-            submitted = st.form_submit_button("Find matches", use_container_width=True)
-
-        if not submitted:
-            st.info("Enter a description and press Find matches to see the top semantic matches.")
-            return
-
-        if not query_text.strip():
-            st.warning("Please enter some text before searching.")
-            return
-
-        source_token = build_path_token(semantic_data_path)
-        df, embeddings = get_semantic_index(
-            semantic_data_path,
-            filters["semantic_model_name"],
-            source_token,
-        )
-
-        filtered_df = apply_filters(
-            df,
-            selected_genres=filters["selected_genres"],
-            page_range=filters["page_range"],
-            year_range=filters["year_range"],
-            min_rating=filters["min_rating"],
-            min_ratings_count=filters["min_ratings_count"],
-        )
-
-        if filtered_df.empty:
-            st.info("No books match your selected filters.")
-            return
-
-        filtered_embeddings = embeddings[filtered_df.index.to_numpy()]
-        
-        # Apply sidebar filters before semantic ranking
-        results = search_books(
-            query_text=query_text,
-            df=filtered_df,
-            embeddings=filtered_embeddings,
-            model_name=filters["semantic_model_name"],
-            top_n=filters["top_n"],
-            min_similarity=filters["min_similarity"],
-        )
-
-        if results.empty:
-            st.info("No books match your description.")
-            return
-
-        st.markdown(
-            f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description and filters</p>',
-            unsafe_allow_html=True,
-        )
-
-        if results.empty:
-            st.info("No books match both the semantic search and your selected filters. Try adjusting your filters.")
-            return
-
-        # Semantic mode should rank by similarity first
-        results = results.sort_values("similarity", ascending=False)
-
-        render_book_grid(results)
+    if not submitted:
+        st.info("Enter a description and press Find matches to see the top semantic matches.")
         return
 
-    # ── Apply filters ──────────────────────────
-    results = apply_filters(
+    if not query_text.strip():
+        st.warning("Please enter some text before searching.")
+        return
+
+    source_token = build_path_token(semantic_data_path)
+    df, embeddings = get_semantic_index(
+        semantic_data_path,
+        filters["semantic_model_name"],
+        source_token,
+    )
+
+    filtered_df = apply_filters(
         df,
         selected_genres=filters["selected_genres"],
-        page_range=filters["page_range"],
-        year_range=filters["year_range"],
+        selected_length_categories=filters["selected_length_categories"],
+        selected_publication_eras=filters["selected_publication_eras"],
         min_rating=filters["min_rating"],
         min_ratings_count=filters["min_ratings_count"],
     )
 
-    results = apply_text_search(
-        results,
-        search_text=filters.get("search_text", ""),
-        search_field=filters.get("search_field", "Title"),
-    )
+    if filtered_df.empty:
+        st.info("No books match your selected filters.")
+        return
 
-    # ── Sort ───────────────────────────────────
-    results = results.sort_values(filters["sort_by"], ascending=False)
-
-    # Auto-reset page when filters change
-    filter_fingerprint = str(filters)
-    if st.session_state.last_filters != filter_fingerprint:
-        st.session_state.page = 1
-        st.session_state.last_filters = filter_fingerprint
-
-    # ── Main area ──────────────────────────────
-    st.markdown("## Discover Your Next Read")
-    st.markdown(
-        f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} match your filters</p>',
-        unsafe_allow_html=True,
+    filtered_embeddings = embeddings[filtered_df.index.to_numpy()]
+    
+    # Apply sidebar filters before semantic ranking
+    results = search_books(
+        query_text=query_text,
+        df=filtered_df,
+        embeddings=filtered_embeddings,
+        model_name=filters["semantic_model_name"],
+        top_n=filters["top_n"],
+        min_similarity=filters["min_similarity"],
     )
 
     if results.empty:
-        st.info("No books match your current filters. Try relaxing some constraints.")
+        st.info("No books match your description.")
         return
 
-    # ── Pagination logic ───────────────────────
-    PAGE_SIZE = 20
-    total_pages = max(1, -(-len(results) // PAGE_SIZE))
-    current_page = st.session_state.page
-    start = (current_page - 1) * PAGE_SIZE
-    page_results = results.iloc[start : start + PAGE_SIZE]
+    st.markdown(
+        f'<p class="result-count">{len(results):,} book{"s" if len(results) != 1 else ""} matched your description and filters</p>',
+        unsafe_allow_html=True,
+    )
 
-    # ── Render grid ────────────────────────────
-    render_book_grid(page_results)
+    # Rank by similarity
+    results = results.sort_values("similarity", ascending=False)
 
-    # ── Navigation bar ─────────────────────────
-    nav_html = f"""
-    <div style="
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 1rem;
-        padding: 1rem 0 0.5rem;
-        font-family: sans-serif;
-    ">
-        <span style="font-size: 0.85rem; color: #888;">
-            Page {current_page} of {total_pages}
-            &nbsp;·&nbsp;
-            {start + 1}–{min(start + PAGE_SIZE, len(results))} of {len(results):,} books
-        </span>
-    </div>
-    """
-    components.html(nav_html, height=50)
-
-    # ── Prev / Next buttons ────────────────────
-    col_prev, col_spacer, col_next = st.columns([1, 6, 1])
-
-    with col_prev:
-        if st.button("← Prev", disabled=(current_page <= 1), use_container_width=True):
-            st.session_state.page -= 1
-            st.rerun()
-
-    with col_next:
-        if st.button("Next →", disabled=(current_page >= total_pages), use_container_width=True):
-            st.session_state.page += 1
-            st.rerun()
+    render_book_grid(results)
 
 
 if __name__ == "__main__":
