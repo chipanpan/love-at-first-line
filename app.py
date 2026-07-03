@@ -452,7 +452,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
     ACTUAL_TO_DISPLAY = {v: k for k, v in LENGTH_CATEGORY_MAPPING.items()}
 
     with st.sidebar:
-        st.markdown("## 📖 Book Matchmaker")
+        st.markdown("## 📖 Book Match")
         st.markdown("*Discover your next reads*")
 
         dataset_label = "books_dataset.csv"
